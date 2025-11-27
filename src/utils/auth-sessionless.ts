@@ -469,6 +469,20 @@ export class SessionlessAuthService {
     };
   }
 
+  // Create demo session - public method for external access
+  async createDemoSession() {
+    console.log('🎭 Creating demo session...');
+    const demoUser = this.createDemoUser('Demo', 'Användare');
+    const session = this.createSession(demoUser, true);
+    
+    return {
+      success: true,
+      user: demoUser,
+      session: session,
+      isDemo: true
+    };
+  }
+
   // Create demo user
   private createDemoUser(firstName: string = 'Demo', lastName: string = 'Användare') {
     const demoUserId = `demo-user-${Date.now()}`;
