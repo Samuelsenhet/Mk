@@ -8,8 +8,9 @@ import { Progress } from "./ui/progress";
 import { Heart, Info, MapPin, Users, Sparkles, Star, Clock, MessageCircle, UserCheck, Zap, Target, ArrowRight } from "lucide-react";
 import { ArchetypeBadge, ArchetypeData } from "./ArchetypeBadge";
 import { ProfileView } from "./ProfileView";
-import { sessionlessApiClient } from "../utils/api-sessionless";
 import { useAnalytics } from "../utils/analytics";
+import { getFunctions, httpsCallable } from "firebase/functions";
+import { app } from "../utils/firebase/client";
 
 interface MatchProfile {
   id: string;
@@ -50,178 +51,39 @@ export function MatchingSystem({ userPersonality, onStartChat }: MatchingSystemP
   const [dailyMatches, setDailyMatches] = useState<DailyMatches | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedMatch, setSelectedMatch] = useState<MatchProfile | null>(null);
-  const [refreshCooldown, setRefreshCooldown] = useState(0);
   const { track } = useAnalytics();
-
-  // Mock data enligt Figma-analys: "Emma L\n26 år - Täby\nDiplomat, INFP"
-  const mockDailyMatches: DailyMatches = {
-    similarityMatches: [
-      {
-        id: "emma_similarity",
-        name: "Emma L",
-        age: 26,
-        photos: ["https://images.unsplash.com/photo-1494790108755-2616b612b372?w=400"],
-        bio: "Kreativ diplomat som älskar konst, musik och djupa samtal. Letar efter någon som delar mina värderingar om äkthet och personlig utveckling. 🎨✨",
-        distance: 2,
-        personalityType: "INFP",
-        personalityName: "Diplomat",
-        category: "Diplomater",
-        compatibilityScore: 94,
-        matchType: 'similarity',
-        interests: ["Emotionell: Vårdande", "Kreativ: Konstnärlig", "Social: Empatisk", "Mental: Reflekterande"],
-        occupation: "Grafisk Designer",
-        education: "Konstfack Stockholm",
-        location: "Täby",
-        isOnline: true,
-        verifiedProfile: true,
-        mutualInterests: ["Konst", "Musik", "Läsning"],
-        aiInsight: "Era kreativa själar resonerar på samma frekvens - perfekt för djupa artistiska diskussioner"
-      },
-      {
-        id: "lucas_similarity",
-        name: "Lucas M.",
-        age: 29,
-        photos: ["https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400"],
-        bio: "Empatisk och driven person som brinner för att hjälpa andra växa. Jobbar inom coaching och ledarskap. Söker någon som värdesätter personlig utveckling. 🌱",
-        distance: 5,
-        personalityType: "ENFJ",
-        personalityName: "Protagonisten",
-        category: "Diplomater",
-        compatibilityScore: 91,
-        matchType: 'similarity',
-        interests: ["Coaching", "Ledarskap", "Självutveckling", "Resor", "Podcast"],
-        occupation: "Ledarskapskonsult",
-        education: "Handelshögskolan",
-        location: "Vasastan, Stockholm",
-        isOnline: false,
-        lastSeen: "2 tim sedan",
-        verifiedProfile: true,
-        mutualInterests: ["Självutveckling", "Podcast"],
-        aiInsight: "Era gemensamma värderingar om personlig tillväxt skapar stark grund för relation"
-      }
-    ],
-    complementMatches: [
-      {
-        id: "anna_complement",
-        name: "Anna K.",
-        age: 27,
-        photos: ["https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=400"],
-        bio: "Organiserad och omtänksam person som älskar att planera och skapa struktur. Arbetar som projektledare och har ett varmt hjärta för familj och vänskap. 💚",
-        distance: 3,
-        personalityType: "ISFJ",
-        personalityName: "Beskyddaren",
-        category: "Byggare",
-        compatibilityScore: 89,
-        matchType: 'complement',
-        interests: ["Matlagning", "Trädgård", "Familj", "Filmer", "Promenader"],
-        occupation: "Projektledare",
-        education: "KTH",
-        location: "Östermalm, Stockholm",
-        isOnline: true,
-        verifiedProfile: true,
-        mutualInterests: ["Filmer"],
-        aiInsight: "Er kombination av kreativitet och struktur skapar perfekt balans i relationen"
-      },
-      {
-        id: "oliver_complement",
-        name: "Oliver L.",
-        age: 25,
-        photos: ["https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=400"],
-        bio: "Spontan äventyrare som lever i nuet! Älskar att resa, upptäcka nya platser och träffa intressanta människor. Livet är för kort för att vara tråkigt! 🌟",
-        distance: 4,
-        personalityType: "ESFP",
-        personalityName: "Underhållaren",
-        category: "Upptäckare",
-        compatibilityScore: 86,
-        matchType: 'complement',
-        interests: ["Resor", "Äventyr", "Musik", "Dans", "Fotografering"],
-        occupation: "Fotograf",
-        education: "Fotohögskolan",
-        location: "Södermalm, Stockholm",
-        isOnline: true,
-        verifiedProfile: true,
-        mutualInterests: ["Musik", "Fotografering"],
-        aiInsight: "Hans spontanitet kompletterar din reflektion - tillsammans skapar ni magiska upplevelser"
-      },
-      {
-        id: "sofia_complement",
-        name: "Sofia R.",
-        age: 30,
-        photos: ["https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400"],
-        bio: "Analytisk och visionär tänkare som älskar innovation och framtidsteknologi. Jobbar med hållbara lösningar och drömmer om en bättre värld. 🚀",
-        distance: 6,
-        personalityType: "INTJ",
-        personalityName: "Arkitekten",
-        category: "Strateger",
-        compatibilityScore: 92,
-        matchType: 'complement',
-        interests: ["Teknologi", "Innovation", "Hållbarhet", "Böcker", "Schack"],
-        occupation: "Tech Innovation Lead",
-        education: "KTH Civilingenjör",
-        location: "Kista, Stockholm",
-        isOnline: false,
-        lastSeen: "30 min sedan",
-        verifiedProfile: true,
-        mutualInterests: ["Teknologi", "Böcker"],
-        aiInsight: "Era olika styrkor inom kreativitet och analytik skapar innovativ dynamik"
-      }
-    ],
-    refreshTime: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 timmar från nu
-    totalMatches: 5
-  };
 
   useEffect(() => {
     const loadDailyMatches = async () => {
       try {
         setLoading(true);
-        console.log('[DAILY MATCHES] Laddar dagliga MÄÄK-matchningar med Smart flödesmatchning...');
+        console.log('[DAILY MATCHES] Laddar dagliga MÄÄK-matchningar från Firebase Functions...');
+
+        const functions = getFunctions(app);
+        const getDailyMatches = httpsCallable(functions, 'getDailyMatches');
+        const result = await getDailyMatches({ userPersonality: userPersonality?.type || 'Diplomat' });
         
-        // Simulera API-anrop
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        // Försök hämta från API
-        try {
-          const result = await sessionlessApiClient.getDailyMatches(userPersonality?.type);
-          console.log('[DAILY MATCHES API] Resultat från API:', result);
-          
-          // Check if result contains the daily matches structure
-          if (result && (result.similarityMatches || result.complementMatches)) {
-            // Ensure refreshTime is properly handled
-            const processedResult = {
-              ...result,
-              refreshTime: result.refreshTime || new Date(Date.now() + 24 * 60 * 60 * 1000),
-              totalMatches: result.totalMatches || (result.similarityMatches?.length || 0) + (result.complementMatches?.length || 0)
-            };
-            setDailyMatches(processedResult);
-            console.log('[DAILY MATCHES SUCCESS] API-matchningar laddade framgångsrikt');
-          } else if (result.success && result.matches) {
-            // Legacy format support
-            const processedMatches = {
-              ...result.matches,
-              refreshTime: result.matches.refreshTime || new Date(Date.now() + 24 * 60 * 60 * 1000),
-              totalMatches: result.matches.totalMatches || 0
-            };
-            setDailyMatches(processedMatches);
-            console.log('[DAILY MATCHES SUCCESS] Legacy API-format använt');
-          } else {
-            throw new Error('No valid matches structure from API');
-          }
-        } catch (apiError) {
-          console.log('[DAILY MATCHES FALLBACK] API-fel, använder demo-matchningar:', apiError);
-          setDailyMatches(mockDailyMatches);
-        }
-        
-        // Spåra laddning av dagliga matchningar
+        const data = result.data as any;
+
+        const newDailyMatches: DailyMatches = {
+          similarityMatches: data.similarityMatches,
+          complementMatches: data.complementMatches,
+          refreshTime: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          totalMatches: data.similarityMatches.length + data.complementMatches.length,
+        };
+
+        setDailyMatches(newDailyMatches);
+
         track('daily_matches_loaded', {
           user_personality: userPersonality?.type || 'unknown',
-          similarity_count: mockDailyMatches.similarityMatches.length,
-          complement_count: mockDailyMatches.complementMatches.length,
-          total_matches: mockDailyMatches.totalMatches
+          similarity_count: newDailyMatches.similarityMatches.length,
+          complement_count: newDailyMatches.complementMatches.length,
+          total_matches: newDailyMatches.totalMatches,
         });
-        
+
       } catch (error) {
         console.error('[DAILY MATCHES ERROR] Fel vid laddning av dagliga matchningar:', error);
-        setDailyMatches(mockDailyMatches);
+        setDailyMatches(null);
       } finally {
         setLoading(false);
       }
