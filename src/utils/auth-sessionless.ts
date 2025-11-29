@@ -1,10 +1,7 @@
-import { createClient } from '@supabase/supabase-js';
-import { projectId, publicAnonKey } from './supabase/info';
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { app } from "./firebase/client";
 
-const supabase = createClient(
-  `https://${projectId}.supabase.co`,
-  publicAnonKey
-);
+const auth = getAuth(app);
 
 interface SignupData {
   email: string;
@@ -26,39 +23,26 @@ interface UserSession {
 }
 
 export class SessionlessAuthService {
-  private currentSession: UserSession | null = null;
-  private sessionStorageKey = 'maak-user-session';
-  private errorRecoveryEnabled = true;
+  private currentUser: any = null;
 
-  // Auto error correction system
-  private async withErrorRecovery<T>(
-    operation: () => Promise<T>,
-    fallback?: () => Promise<T>
-  ): Promise<T> {
+  constructor() {
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        this.currentUser = user;
+      } else {
+        this.currentUser = null;
+      }
+    });
+  }
+
+  async signInAnonymously() {
     try {
-      return await operation();
+      const userCredential = await signInAnonymously(auth);
+      this.currentUser = userCredential.user;
+      return { success: true, user: this.currentUser };
     } catch (error) {
-      // Only log non-expected errors (not SMS or provider errors)
-      if (error instanceof Error && 
-          !error.message.includes('Unsupported phone provider') &&
-          !error.message.includes('SMS') &&
-          !error.message.includes('provider')) {
-        console.warn('🔄 Error detected, attempting recovery:', error);
-      }
-      
-      if (this.errorRecoveryEnabled && fallback) {
-        console.log('🛠️ Applying automatic error correction...');
-        try {
-          const result = await fallback();
-          console.log('✅ Auto-recovery successful');
-          return result;
-        } catch (fallbackError) {
-          console.error('❌ Auto-recovery failed:', fallbackError);
-          throw error; // Throw original error
-        }
-      }
-      
-      throw error;
+      console.error('Anonymous sign-in error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   }
 
@@ -300,124 +284,30 @@ export class SessionlessAuthService {
   }
 
   async getSession() {
-    return this.withErrorRecovery(
-      async () => {
-        console.log('🔍 Getting current session...');
-        
-        // Check current session first
-        if (this.currentSession && this.isSessionValid(this.currentSession)) {
-          console.log('✅ Current session is valid');
-          return {
-            success: true,
-            session: this.currentSession,
-            user: this.currentSession.user,
-            isDemo: this.currentSession.isDemo
-          };
-        }
-
-        // Try to restore from localStorage
-        try {
-          const storedSessionData = localStorage.getItem(this.sessionStorageKey);
-          if (storedSessionData) {
-            const storedSession = JSON.parse(storedSessionData);
-            if (this.isSessionValid(storedSession)) {
-              this.currentSession = storedSession;
-              console.log('✅ Session restored from localStorage');
-              return {
-                success: true,
-                session: storedSession,
-                user: storedSession.user,
-                isDemo: storedSession.isDemo
-              };
-            } else {
-              console.log('⏰ Stored session expired, cleaning up');
-              localStorage.removeItem(this.sessionStorageKey);
-            }
-          }
-        } catch (storageError) {
-          console.warn('⚠️ Failed to restore session from localStorage:', storageError);
-          localStorage.removeItem(this.sessionStorageKey);
-        }
-
-        // Try to get real Supabase session
-        try {
-          const { data: { session }, error } = await supabase.auth.getSession();
-          
-          if (session?.user && !error) {
-            const newSession = this.createSession(session.user, false);
-            console.log('✅ Supabase session found and restored');
-            return {
-              success: true,
-              session: newSession,
-              user: session.user,
-              isDemo: false
-            };
-          }
-        } catch (supabaseError) {
-          console.warn('⚠️ Supabase session check failed:', supabaseError);
-        }
-
-        console.log('❌ No valid session found');
-        return {
-          success: false,
-          error: 'Ingen giltig session hittades'
-        };
-      },
-      // No fallback for getSession - we need real authentication
-      undefined
-    );
+    if (this.currentUser) {
+      return { success: true, user: this.currentUser, session: this.currentUser.toJSON() };
+    }
+    return this.signInAnonymously();
   }
 
   async logout() {
-    return this.withErrorRecovery(
-      async () => {
-        console.log('🚪 Logging out...');
-        
-        // Clear local session
-        this.currentSession = null;
-        
-        try {
-          localStorage.removeItem(this.sessionStorageKey);
-        } catch (storageError) {
-          console.warn('⚠️ Failed to clear localStorage:', storageError);
-        }
-
-        // Try to sign out from Supabase
-        try {
-          const { error } = await supabase.auth.signOut();
-          if (error) {
-            console.warn('⚠️ Supabase logout warning:', error);
-          }
-        } catch (supabaseError) {
-          console.warn('⚠️ Supabase logout error:', supabaseError);
-        }
-
-        return { success: true };
-      },
-      // Fallback: Force local logout
-      async () => {
-        console.log('🔄 Force logout - clearing all local data...');
-        this.currentSession = null;
-        
-        try {
-          localStorage.clear(); // Clear all localStorage
-        } catch (error) {
-          console.warn('⚠️ Failed to clear localStorage:', error);
-        }
-        
-        return { success: true };
-      }
-    );
+    try {
+      await signOut(auth);
+      return { success: true };
+    } catch (error) {
+      console.error('Logout error:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown logout error' };
+    }
   }
 
   // Get current user without token dependency
   getCurrentUser() {
-    return this.currentSession?.user || null;
+    return this.currentUser;
   }
 
   // Check if user is authenticated
   isAuthenticated(): boolean {
-    return this.currentSession !== null && this.isSessionValid(this.currentSession);
+    return this.currentUser !== null;
   }
 
   // Get session info for API calls

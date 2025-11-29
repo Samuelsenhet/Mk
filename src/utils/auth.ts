@@ -1,11 +1,8 @@
-import { createClient } from '@supabase/supabase-js';
-import { projectId, publicAnonKey } from './supabase/info';
+import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, signInWithPhoneNumber, RecaptchaVerifier } from "firebase/auth";
+import { app } from "./firebase/client";
 import { apiClient } from './api';
 
-const supabase = createClient(
-  `https://${projectId}.supabase.co`,
-  publicAnonKey
-);
+const auth = getAuth(app);
 
 interface SignupData {
   email: string;
@@ -23,199 +20,48 @@ export class AuthService {
   
   async signup(userData: SignupData) {
     try {
-      // First create user through our backend (which handles email confirmation)
-      const backendResult = await apiClient.signup(userData);
-      
-      if (!backendResult.success) {
-        throw new Error(backendResult.error || 'Signup failed');
-      }
-
-      // Then sign in the user
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: userData.email,
-        password: userData.password,
-      });
-
-      if (error) {
-        throw new Error(`Login after signup failed: ${error.message}`);
-      }
-
-      if (data.session?.access_token) {
-        apiClient.setAccessToken(data.session.access_token);
-      }
-
-      return {
-        success: true,
-        user: data.user,
-        session: data.session
-      };
+      const userCredential = await createUserWithEmailAndPassword(auth, userData.email, userData.password);
+      const user = userCredential.user;
+      // You might want to create a user profile in Firestore here as well
+      return { success: true, user };
     } catch (error) {
       console.error('Signup error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown signup error'
-      };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown signup error' };
     }
   }
 
   async login(loginData: LoginData) {
     try {
-      const { data, error } = await supabase.auth.signInWithPassword(loginData);
-
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      if (data.session?.access_token) {
-        apiClient.setAccessToken(data.session.access_token);
-      }
-
-      return {
-        success: true,
-        user: data.user,
-        session: data.session
-      };
+      const userCredential = await signInWithEmailAndPassword(auth, loginData.email, loginData.password);
+      const user = userCredential.user;
+      return { success: true, user };
     } catch (error) {
       console.error('Login error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown login error'
-      };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown login error' };
     }
   }
 
   async logout() {
     try {
-      // Clear the API client token first
-      apiClient.setAccessToken(null);
-      
-      // Clear any demo session
-      localStorage.removeItem('demo-session');
-      
-      const { error } = await supabase.auth.signOut();
-      
-      if (error) {
-        console.warn('Supabase logout warning:', error);
-        // Don't throw - local cleanup is more important
-      }
-
+      await signOut(auth);
       return { success: true };
     } catch (error) {
       console.error('Logout error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown logout error'
-      };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown logout error' };
     }
   }
 
-  async getSession() {
-    try {
-      console.log('🔍 Getting session...');
-      
-      // First try to get demo session from localStorage
-      const storedSession = localStorage.getItem('demo-session');
-      if (storedSession) {
-        console.log('📱 Found stored demo session');
-        try {
-          const demoSession = JSON.parse(storedSession);
-          
-          if (demoSession.access_token?.startsWith('demo-token-') && demoSession.user) {
-            console.log('🎭 Valid demo session structure found');
-            
-            // Extract and validate demo token timestamp
-            const tokenTimestamp = parseInt(demoSession.access_token.replace('demo-token-', ''));
-            if (!isNaN(tokenTimestamp) && tokenTimestamp > 0) {
-              const now = Date.now();
-              const hoursPassed = (now - tokenTimestamp) / (1000 * 60 * 60);
-              
-              // Use 25-hour limit (24h + 1h grace period) to match server
-              if (hoursPassed < 25 && hoursPassed > -1) {
-                console.log('🔧 Setting API client token from stored demo session...');
-                apiClient.setAccessToken(demoSession.access_token);
-                
-                // Immediately verify token was set
-                const tokenStatus = apiClient.getTokenStatus();
-                console.log('🔍 Token status after setting:', tokenStatus);
-                
-                const remaining = Math.max(0, 24 - hoursPassed);
-                console.log(`✅ Demo session restored (${Math.round(remaining)}h remaining)`);
-                
-                return {
-                  success: true,
-                  session: demoSession,
-                  user: demoSession.user,
-                  isDemoSession: true
-                };
-              } else {
-                console.log(`⏰ Demo session expired (${Math.round(hoursPassed)}h old, max 24h)`);
-                localStorage.removeItem('demo-session');
-              }
-            } else {
-              console.log('❌ Invalid demo token timestamp format');
-              localStorage.removeItem('demo-session');
-            }
-          }
-        } catch (parseError) {
-          console.warn('❌ Failed to parse stored demo session:', parseError);
-          localStorage.removeItem('demo-session');
-        }
-      }
-
-      // Try to get real Supabase session with better error handling
-      try {
-        console.log('🔍 Checking Supabase session...');
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (error) {
-          console.warn('⚠️ Supabase session error:', error.message);
-          // Don't throw immediately - check if it's a critical error
-          if (error.message.includes('refresh_token') || error.message.includes('expired')) {
-            console.log('🔄 Session expired, clearing local state');
-            // Session is expired, continue to no session case
-          } else {
-            console.error('❌ Critical Supabase session error:', error);
-          }
-          return { success: false, error: error.message };
-        }
-
-        if (session?.user) {
-          console.log('✅ Valid Supabase session found:', session.user.id);
-          
-          // Set token for API calls
-          if (session.access_token) {
-            apiClient.setAccessToken(session.access_token);
-            console.log('🔑 API token set from Supabase session');
-          }
-          
-          return {
-            success: true,
-            session,
-            user: session.user,
-            isDemoSession: false
-          };
+  getSession() {
+    return new Promise((resolve) => {
+      const unsubscribe = onAuthStateChanged(auth, (user) => {
+        unsubscribe();
+        if (user) {
+          resolve({ success: true, user, session: user.toJSON() });
         } else {
-          console.log('ℹ️ No valid Supabase session found');
+          resolve({ success: false, error: 'No user is signed in.' });
         }
-      } catch (supabaseError) {
-        console.warn('⚠️ Supabase connection issue:', supabaseError);
-        // Don't throw - fallback to no session
-      }
-
-      // No valid session found
-      console.log('❌ No valid session found (demo or Supabase)');
-      return {
-        success: false,
-        error: 'No valid session found'
-      };
-      
-    } catch (error) {
-      console.error('💥 Critical session check error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Unknown session error'
-      };
-    }
+      });
+    });
   }
 
   // Demo user creation for testing
@@ -415,52 +261,24 @@ export class AuthService {
   }
 
   // Auth state change listener
-  onAuthStateChange(callback: (event: string, session: any) => void) {
-    return supabase.auth.onAuthStateChange(callback);
+  onAuthStateChange(callback: (user: any) => void) {
+    return onAuthStateChanged(auth, callback);
   }
 
   // Get current user
-  async getCurrentUser() {
-    try {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      
-      if (error) {
-        console.warn('Get user error:', error);
-        return null;
-      }
-      
-      return user;
-    } catch (error) {
-      console.error('Get current user error:', error);
-      return null;
-    }
+  getCurrentUser() {
+    return auth.currentUser;
   }
 
-  // Refresh session
+  // Refresh session (handled automatically by Firebase SDK)
   async refreshSession() {
-    try {
-      const { data, error } = await supabase.auth.refreshSession();
-      
-      if (error) {
-        throw error;
-      }
-      
-      if (data.session?.access_token) {
-        apiClient.setAccessToken(data.session.access_token);
-      }
-      
-      return {
-        success: true,
-        session: data.session,
-        user: data.user
-      };
-    } catch (error) {
-      console.error('Session refresh error:', error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : 'Session refresh failed'
-      };
+    const user = auth.currentUser;
+    if (user) {
+      const token = await user.getIdToken(true);
+      apiClient.setAccessToken(token);
+      return { success: true, user };
     }
+    return { success: false, error: 'No user is signed in.' };
   }
 }
 
